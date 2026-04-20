@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python data_generator/generator.py --dry-run --rate 3)",
+      "Bash(kill %1)",
+      "Bash(wait echo *)",
+      "Bash(python data_generator/generator.py --dry-run --rate 5)",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(docker pull *)",
+      "Bash(docker image *)",
+      "Bash(timeout 15 python data_generator/generator.py --rate 10 --fraud 0.10)",
+      "Bash(pip install *)",
+      "Bash(python *)",
+      "Bash(pip uninstall *)",
+      "Bash(timeout 5)"
+    ]
+  }
+}
