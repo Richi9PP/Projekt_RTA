@@ -1,1 +1,2 @@
-kafka-python-ng>=2.2.3   # kafka-python fork with Python 3.12+ support
+kafka-python>=2.0.2
+lz4>=4.3.2
