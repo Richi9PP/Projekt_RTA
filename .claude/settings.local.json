@@ -25,7 +25,8 @@
       "Bash(timeout 8 bash -c 'cd \"H:\\\\Programs\\\\ADWCZ\\\\RTA_PP\\\\data_generator\" && python generator.py --rate 50 --fraud 0.05 2>&1')",
       "Bash(pip show *)",
       "Bash(where python *)",
-      "Bash(echo \"PID=$!\" sleep 5 timeout 10 python data_generator/verify_kafka.py --n 3 --from-latest)"
+      "Bash(echo \"PID=$!\" sleep 5 timeout 10 python data_generator/verify_kafka.py --n 3 --from-latest)",
+      "Bash(git *)"
     ]
   }
 }

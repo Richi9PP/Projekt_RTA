@@ -1,0 +1,87 @@
+# TODO — Real-Time Fraud Detection (RTA_PP)
+
+## Ukończone
+- [x] Silnik generowania danych (`data_generator/`)
+- [x] Infrastruktura Kafka (docker-compose.yml, KRaft, Kafka UI)
+- [x] Połączenie generator → Kafka (naprawione: dual-listener, kafka-python zainstalowany)
+
+---
+
+## Krok 4 — Apache Spark Structured Streaming
+
+Cel: odczyt strumieni z Kafki, parsowanie JSON, join po `tx_id`.
+
+Zadania:
+- [ ] Stworzyć `spark_job/fraud_detector.py`
+- [ ] Podpiąć Sparka do Kafki (`spark.readStream` z bootstrap `localhost:9092`)
+- [ ] Sparsować schematy JSON dla `transactions` i `app_events`
+- [ ] Join strumieniowy obu tematów po `tx_id` (watermark ~30s)
+- [ ] Uruchomić job przez `spark-submit` lub Dockerfile z `bitnami/spark`
+
+Uwaga: Spark działa w kontenerze `jupyterlab-project/` (port 4040 = Spark UI).
+
+---
+
+## Krok 5 — Feature Engineering (okna czasowe)
+
+Cel: obliczenie cech w oknach czasowych dla każdego `sender_id`.
+
+Cechy do wyliczenia:
+- [ ] `tx_count_last_5min` — liczba transakcji w ostatnich 5 min per sender
+- [ ] `amount_zscore` — odchylenie kwoty od historycznej średniej sendera
+- [ ] `unique_recipients_1h` — unikalni odbiorcy w ostatniej godzinie
+- [ ] `geo_distance_km` — dystans GPS od miasta rejestracji (haversine)
+- [ ] `pin_failure_rate` — stosunek błędnych PIN-ów z `app_events`
+
+---
+
+## Krok 6 — Model ML / Reguły Scoringowe
+
+Cel: przypisanie ryzyka do każdej transakcji w czasie rzeczywistym.
+
+Opcja A (reguły deterministyczne — szybciej):
+- [ ] Napisać reguły progowe na wyliczonych cechach
+- [ ] Zwrócić `risk_score` (0.0–1.0) i `decision` (APPROVE / REVIEW / BLOCK)
+
+Opcja B (Isolation Forest / XGBoost — dokładniej):
+- [ ] Wygenerować dataset z generatora (pole `is_fraud` jako etykieta)
+- [ ] Trenować model offline (scikit-learn lub PySpark MLlib)
+- [ ] Załadować model do Spark job i scorować online
+
+Progi decyzyjne:
+  - APPROVE  : risk_score < 0.3
+  - REVIEW   : risk_score 0.3–0.7
+  - BLOCK    : risk_score > 0.7
+
+Wynik: publikacja na temat Kafka `alerts` jako JSON:
+  `{ tx_id, risk_score, decision, fraud_type }`
+
+---
+
+## Krok 7 — Dashboard Grafana
+
+Cel: wizualizacja real-time wyników scoringu.
+
+- [ ] Dodać Grafanę do docker-compose.yml
+- [ ] Podpiąć plugin Kafka → Grafana (lub Redis jako bufor)
+- [ ] Stworzyć dashboard z panelami:
+  - throughput (tx/s)
+  - fraud rate (%)
+  - rozkład scenariuszy oszustw (account_takeover, rapid_fire, ...)
+  - mapa GPS anomalii
+
+---
+
+## Uruchomienie (aktualny stan)
+
+```bash
+# 1. Start Kafka
+cd H:/Programs/ADWCZ/RTA_PP
+docker compose up -d
+
+# 2. Generator danych
+python data_generator/generator.py --rate 10 --fraud 0.1
+
+# 3. Kafka UI
+http://localhost:8080
+```
