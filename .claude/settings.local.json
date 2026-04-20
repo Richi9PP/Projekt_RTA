@@ -13,7 +13,19 @@
       "Bash(pip install *)",
       "Bash(python *)",
       "Bash(pip uninstall *)",
-      "Bash(timeout 5)"
+      "Bash(timeout 5)",
+      "Bash(docker exec *)",
+      "Bash(docker rm *)",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /PID 15516 /F)",
+      "Bash(taskkill /PID 2584 /F)",
+      "Bash(powershell -Command \"Get-Process -Id 15516 | Stop-Process -Force -ErrorAction SilentlyContinue; Get-Process -Id 2584 | Stop-Process -Force -ErrorAction SilentlyContinue\")",
+      "Bash(powershell -Command \"Start-Service *docker* -ErrorAction SilentlyContinue\")",
+      "Bash(powershell -Command \"& 'C:\\\\\\\\Program Files\\\\\\\\Docker\\\\\\\\Docker\\\\\\\\Docker Desktop.exe'\")",
+      "Bash(timeout 8 bash -c 'cd \"H:\\\\Programs\\\\ADWCZ\\\\RTA_PP\\\\data_generator\" && python generator.py --rate 50 --fraud 0.05 2>&1')",
+      "Bash(pip show *)",
+      "Bash(where python *)",
+      "Bash(echo \"PID=$!\" sleep 5 timeout 10 python data_generator/verify_kafka.py --n 3 --from-latest)"
     ]
   }
 }

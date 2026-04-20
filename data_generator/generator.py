@@ -42,18 +42,22 @@ log = logging.getLogger(__name__)
 def _make_producer(bootstrap: str):
     try:
         from kafka import KafkaProducer  # type: ignore
-        return KafkaProducer(
-            bootstrap_servers=bootstrap,
-            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-            key_serializer=lambda k: k.encode("utf-8") if k else None,
-            acks="all",
-            retries=5,
-            compression_type="lz4",
-            linger_ms=20,
-        )
-    except ImportError:
-        log.warning("kafka-python not installed – running in dry-run mode.")
-        return None
+    except ImportError as e:
+        raise RuntimeError(
+            "kafka-python is not installed. Install it with "
+            "`pip install -r data_generator/requirements.txt`, "
+            "or pass --dry-run to print JSON to stdout."
+        ) from e
+
+    return KafkaProducer(
+        bootstrap_servers=bootstrap,
+        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+        key_serializer=lambda k: k.encode("utf-8") if k else None,
+        acks="all",
+        retries=5,
+        compression_type="lz4",
+        linger_ms=20,
+    )
 
 
 def _publish(producer, topic: str, payload: dict, dry_run: bool,
