@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Main data generator – orchestrates user profiles, fraud scenarios,
 and Kafka publishing.
