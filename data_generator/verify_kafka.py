@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Verification script – Step 2.
 

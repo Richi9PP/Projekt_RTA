@@ -1,0 +1,15 @@
+# Kafka data generator
+kafka-python>=2.0.2
+lz4>=4.3.2
+
+# Dataset preparation and notebooks
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.3
+xgboost>=2.0
+joblib>=1.3
+
+# Jupyter environment
+jupyterlab>=4.0
+ipykernel>=6.25
+matplotlib>=3.7
