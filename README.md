@@ -4,8 +4,11 @@
 
 ---
 
-## 
-haslo do jupytera to rta
+## Dostepne interfejsy lokalne
+
+- Kafka UI: http://localhost:8080
+- JupyterLab: http://localhost:8888, token/haslo: `rta`
+
 ## 1. Problem biznesowy
 
 Platformy platnosci P2P (BLIK-to-BLIK, Revolut, PayPal Friends) staja przed problemem
@@ -19,8 +22,8 @@ oszustw finansowych dzielacych sie na kilka wzorcow:
 | **Round-trip** | Srodki odsylane natychmiast miedzy dwoma kontami, by zamaskowac skradziona kwote. |
 | **Layering** | Srodki przechodza przez lancuch kont-slupow, by utrudnic sledzenie. |
 
-**Cel systemu:** ocenic ryzyko kazdej transakcji w czasie < 200 ms i zwrocic wynik
-(APPROVE / REVIEW / BLOCK) zanim bank zatwierdzi przelew.
+**Cel systemu:** ocenic ryzyko kazdej transakcji w czasie < 200 ms i zwrocic
+predykcje modelu ML zanim bank zatwierdzi przelew.
 
 ---
 
@@ -56,8 +59,9 @@ Szczegolowo:
                              |
                +-------------v--------------+
                |   Kafka topic: alerts       |
-               |  { tx_id, risk_score,       |
-               |    decision, fraud_type }   |
+               |  { tx_id, fraud_probability,|
+               |    predicted_fraud,         |
+               |    fraud_type }             |
                +-------------+--------------+
                              |
                +-------------v--------------+
@@ -75,10 +79,13 @@ Szczegolowo:
 | 1 | Silnik generowania danych (`data_generator/`) | **GOTOWE** |
 | 2 | Infrastruktura Kafka (Docker Compose) | **GOTOWE** |
 | 3 | Weryfikacja polaczenia generator -> Kafka | **GOTOWE** |
-| 4 | Spark Structured Streaming job | TODO |
-| 5 | Feature engineering (okna czasowe) | TODO |
-| 6 | Model ML / reguły scoringowe | TODO |
-| 7 | Dashboard Grafana | TODO |
+| 4 | Eksport datasetu offline (`data_generator/export_datasets.py`) | **GOTOWE** |
+| 5 | Notebook treningowy ML (`fraud_model_training.ipynb`) | **GOTOWE** |
+| 6 | Modele offline (`models/`) | **GOTOWE** |
+| 7 | Spark Structured Streaming job | TODO |
+| 8 | Feature engineering online (okna czasowe) | TODO |
+| 9 | Scoring online / publikacja alertow | TODO |
+| 10 | Dashboard Grafana | TODO |
 
 ---
 
@@ -90,8 +97,10 @@ Szczegolowo:
 data_generator/
     profiles.py          # pula uzytkownikow: normal / mule / fraudster
     event_builder.py     # budowanie payloadow JSON dla obu tematow Kafka
+    export_datasets.py   # eksport CSV/JSONL do treningu offline
     fraud_scenarios.py   # 5 wzorcow oszustw jako funkcje mutujace payload
     generator.py         # glowna petla + CLI + integracja z Kafka
+    schemas.py           # wspolna definicja pol tematow Kafka
     verify_kafka.py      # konsument weryfikacyjny - czyta wiadomosci z Kafki
     requirements.txt
 ```
@@ -154,17 +163,62 @@ Temat `app_events`:
 
 ### 4.2 `docker-compose.yml` - infrastruktura Kafka
 
-Uruchamia dwa kontenery:
+Uruchamia trzy kontenery:
 - **rta_kafka** (`apache/kafka:latest`) - broker KRaft (bez Zookeepera), port 9092
 - **rta_kafka_ui** (`provectuslabs/kafka-ui`) - interfejs webowy, port 8080
+- **rta_jupyter** (`jupyterlab-project-jupyter:latest`) - JupyterLab, port 8888, token `rta`
 
 Tematy tworzone sa automatycznie przy pierwszej publikacji (`AUTO_CREATE_TOPICS_ENABLE=true`).
+
+### 4.3 Dataset i modele offline
+
+Repozytorium zawiera eksport danych syntetycznych do treningu batch:
+
+```
+datasets/
+    fraud_events_100k.csv
+    fraud_events_100k.jsonl
+```
+
+Dataset mozna odtworzyc poleceniem:
+
+```bash
+python data_generator/export_datasets.py --rows 100000 --fraud 0.10
+```
+
+Notebook `fraud_model_training.ipynb`:
+- wczytuje pojedynczy dataset z cechami i etykieta (`label` / `is_fraud`),
+- usuwa kolumny identyfikatorow i leakage (`label`, `is_fraud`, `fraud_type`),
+- trenuje Logistic Regression, Random Forest i XGBoost,
+- porownuje modele metrykami ROC AUC i F1.
+
+Ostatni trening wskazal XGBoost jako najlepszy model:
+
+| Model | ROC AUC | F1 |
+|---|---:|---:|
+| XGBoost | 0.9993 | 0.9345 |
+| Logistic Regression | 0.9972 | 0.8862 |
+| Random Forest | 0.9921 | 0.7907 |
+
+Zapisane artefakty:
+
+```
+models/
+    logistic_regression.joblib
+    xgboost.joblib
+```
 
 ---
 
 ## 5. Uruchomienie
 
-### Krok 1 - Start Kafki
+### Krok 1 - Instalacja zaleznosci lokalnych
+
+```bash
+pip install -r requirements.txt
+```
+
+### Krok 2 - Start Kafki, Kafka UI i JupyterLab
 
 ```bash
 docker compose up -d
@@ -172,11 +226,9 @@ docker compose up -d
 docker ps  # kolumna STATUS powinna pokazac "(healthy)"
 ```
 
-### Krok 2 - Uruchomienie generatora
+### Krok 3 - Uruchomienie generatora
 
 ```bash
-pip install -r data_generator/requirements.txt
-
 # Wyslij dane do Kafki (10 tx/s, 10% fraudow)
 python data_generator/generator.py --rate 10 --fraud 0.10
 
@@ -184,21 +236,28 @@ python data_generator/generator.py --rate 10 --fraud 0.10
 python data_generator/generator.py --dry-run --rate 5
 ```
 
-### Krok 3 - Weryfikacja odczytu z Kafki
+### Krok 4 - Weryfikacja odczytu z Kafki
 
 ```bash
 python data_generator/verify_kafka.py --n 10
 ```
 
-### Interfejs webowy Kafki
+### Krok 5 - Eksport datasetu offline
 
-Otwórz w przegladarce: http://localhost:8080
+```bash
+python data_generator/export_datasets.py --rows 100000 --fraud 0.10
+```
+
+### Interfejsy webowe
+
+- Kafka UI: http://localhost:8080
+- JupyterLab: http://localhost:8888, token/haslo `rta`
 
 ---
 
 ## 6. Nastepne kroki
 
-### Krok 4 - Apache Spark Structured Streaming
+### Krok 7 - Apache Spark Structured Streaming
 
 Napisac job Pythonowy (`spark_job/fraud_detector.py`) ktory:
 1. Odczytuje strumien z tematu `transactions` i `app_events`
@@ -213,17 +272,12 @@ Napisac job Pythonowy (`spark_job/fraud_detector.py`) ktory:
 
 Uruchomienie przez Docker (obraz `bitnami/spark` lub lokalny `spark-submit`).
 
-### Krok 5 - Model ML
+### Krok 8 - Scoring online
 
-Trening offline (Isolation Forest / XGBoost) na danych z generatora (pole `is_fraud` jako etykieta).
-Wczytanie modelu do Spark joba i scoring online.
+Wczytanie zapisanego modelu z `models/xgboost.joblib` i publikacja predykcji
+ML bez recznie ustawianych progow decyzyjnych.
 
-Progi decyzyjne:
-- APPROVE  : risk_score < 0.3
-- REVIEW   : risk_score 0.3 - 0.7
-- BLOCK    : risk_score > 0.7
-
-### Krok 6 - Dashboard Grafana
+### Krok 9 - Dashboard Grafana
 
 Grafana + plugin Kafka -> wizualizacja real-time:
 - throughput (tx/s)
