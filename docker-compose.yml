@@ -39,5 +39,21 @@ services:
       kafka:
         condition: service_healthy
 
+  jupyter:
+    image: jupyterlab-project-jupyter:latest
+    container_name: rta_jupyter
+    ports:
+      - "8888:8888"
+    environment:
+      JUPYTER_TOKEN: "rta"
+      JUPYTER_ENABLE_LAB: "yes"
+    volumes:
+      - .:/home/jovyan/work
+    working_dir: /home/jovyan/work
+    command: start-notebook.py --NotebookApp.token=rta --NotebookApp.notebook_dir=/home/jovyan/work
+    depends_on:
+      kafka:
+        condition: service_healthy
+
 volumes:
   kafka_data:
