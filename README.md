@@ -4,6 +4,8 @@
 
 ---
 
+## 
+haslo do jupytera to rta
 ## 1. Problem biznesowy
 
 Platformy platnosci P2P (BLIK-to-BLIK, Revolut, PayPal Friends) staja przed problemem
