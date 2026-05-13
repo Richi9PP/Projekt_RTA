@@ -111,8 +111,7 @@ def build_pipeline(spark: SparkSession):
     )
 
     # left outer join on tx_id
-    # Left outer keeps every transaction even when the app_event is absent.
-    # app_event columns will be null for unmatched rows.
+    # app_event columns null for unmatched rows.
     joined = tx.join(
         app,
         (tx["tx_id"] == app["tx_id"])
@@ -121,7 +120,7 @@ def build_pipeline(spark: SparkSession):
         "left_outer",
     ).drop(app["tx_id"])
 
-    # ── feature engineering — mirrors fraud_model_training.ipynb exactly ───────
+    #feature engineering
     features = (
         joined
         # Temporal features from transaction timestamp.
@@ -147,7 +146,7 @@ def build_pipeline(spark: SparkSession):
                 (unix_timestamp(col("app_timestamp")) - unix_timestamp(col("timestamp"))).cast(DoubleType()),
             ).otherwise(lit(None).cast(DoubleType())),
         )
-        # Sender→recipient pair — categorical feature used by the pipeline.
+        # Sender→recipient pair - categorical feature used by the pipeline.
         .withColumn(
             "sender_recipient_pair",
             concat(col("sender_id"), lit("->"), col("recipient_id")),
