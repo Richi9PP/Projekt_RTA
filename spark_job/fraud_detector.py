@@ -7,6 +7,9 @@ Step 1.2: Online feature engineering aligned with fraud_model_training.ipynb:
           - amount_log1p, amount_to_sender_avg
           - event_delay_sec (null when app_event absent)
           - sender_recipient_pair (categorical)
+          - pin_failures, device_changed, device_trusted, is_offhours_login 
+          - tx_count_last_5min per sender_id (5-min window) 
+          - unique_recipients_1h per sender_id (1-hour window) 
 
 Usage
 -----
