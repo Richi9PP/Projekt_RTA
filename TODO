@@ -29,8 +29,7 @@ Wyniki ostatniego notebooka:
 
 
 Cel: `transactions` + `app_events` → Spark Structured Streaming → `alerts`.
-
-### 1.1 Spark job
+Spark job
 - [x] Stworzyć `spark_job/fraud_detector.py`
 - [x] Podpiąć Sparka do Kafki (`spark.readStream`, bootstrap `localhost:9092` albo `kafka:29092` w Dockerze)
 - [x] Odczytać tematy `transactions` i `app_events`
@@ -38,8 +37,7 @@ Cel: `transactions` + `app_events` → Spark Structured Streaming → `alerts`.
 - [x] Dodać watermarki na timestampach obu strumieni
 - [x] Zrobić join strumieniowy po `tx_id`
 - [x] Uruchomić job przez `spark-submit` lub kontener Spark
-
-### 1.2 Minimalne cechy online
+Minimalne cechy online
 - [x] `tx_count_last_5min` — liczba transakcji w ostatnich 5 min per `sender_id`
 - [x] `amount_zscore` — odchylenie kwoty od średniej nadawcy
 - [x] `pin_failures` / `pin_failure_rate` z `app_events`
