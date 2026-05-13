@@ -82,8 +82,8 @@ Szczegolowo:
 | 4 | Eksport datasetu offline (`data_generator/export_datasets.py`) | **GOTOWE** |
 | 5 | Notebook treningowy ML (`fraud_model_training.ipynb`) | **GOTOWE** |
 | 6 | Modele offline (`models/`) | **GOTOWE** |
-| 7 | Spark Structured Streaming job | TODO |
-| 8 | Feature engineering online (okna czasowe) | TODO |
+| 7 | Spark Structured Streaming job | **GOTOWE** |
+| 8 | Feature engineering online (okna czasowe) | **GOTOWE** |
 | 9 | Scoring online / publikacja alertow | TODO |
 | 10 | Dashboard Grafana | TODO |
 
@@ -262,15 +262,18 @@ python data_generator/export_datasets.py --rows 100000 --fraud 0.10
 Napisac job Pythonowy (`spark_job/fraud_detector.py`) ktory:
 1. Odczytuje strumien z tematu `transactions` i `app_events`
 2. Parsuje JSON i joinuje oba strumienie po `tx_id`
-3. Oblicza cechy w oknach czasowych:
-   - `tx_count_last_5min` per `sender_id`
-   - `amount_zscore` (odchylenie od historycznej sredniej)
-   - `unique_recipients_1h`
-   - `geo_distance_km` (dystans GPS od miasta rejestracji)
-   - `pin_failure_rate`
-4. Zwraca wynik jako JSON na temat `alerts`
+3. Oblicza cechy online: 
+     - `tx_count_last_5min` per `sender_id` 
+     - `amount_to_sender_avg` (odchylenie kwoty od średniej nadawcy) 
+     - `unique_recipients_1h`    
+     - `pin_failures`, `device_changed`, `is_offhours_login` 
+     - `event_delay_sec`, `hour`, `is_weekend` 
+4. Uruchomienie: `bash run_spark.sh`
+
 
 Uruchomienie przez Docker (obraz `bitnami/spark` lub lokalny `spark-submit`).
+
+## następne:
 
 ### Krok 8 - Scoring online
 
