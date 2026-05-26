@@ -82,8 +82,8 @@ Szczegolowo:
 | 4 | Eksport datasetu offline (`data_generator/export_datasets.py`) | **GOTOWE** |
 | 5 | Notebook treningowy ML (`fraud_model_training.ipynb`) | **GOTOWE** |
 | 6 | Modele offline (`models/`) | **GOTOWE** |
-| 7 | Spark Structured Streaming job | TODO |
-| 8 | Feature engineering online (okna czasowe) | TODO |
+| 7 | Spark Structured Streaming job | **GOTOWE** |
+| 8 | Feature engineering online (okna czasowe) | **GOTOWE** |
 | 9 | Scoring online / publikacja alertow | TODO |
 | 10 | Dashboard Grafana | TODO |
 
@@ -146,6 +146,7 @@ Temat `app_events`:
   "pin_failures": 0,
   "device_changed": false,
   "new_device_id": "",
+  "is_offhours_login": false,
   "session_duration_sec": 119,
   "app_version": "3.7.3"
 }
@@ -208,6 +209,45 @@ models/
     xgboost.joblib
 ```
 
+### 4.4 `spark_job/` - real-time pipeline (Spark Structured Streaming)
+
+```
+spark_job/
+    fraud_detector.py    # job Sparka: Kafka -> join -> features -> console
+    requirements.txt     # pyspark>=3.5.0
+run_spark.sh             # wrapper: spark-submit z pakietem kafka
+```
+
+Co robi `fraud_detector.py`:
+
+1. Czyta strumienie z tematow Kafka `transactions` i `app_events`
+   (bootstrap `localhost:9092` lub `kafka:29092` przez env `KAFKA_BOOTSTRAP`).
+2. Parsuje JSON wedlug schematow z `data_generator/schemas.py`.
+3. Dodaje watermarki na timestampach obu strumieni (`5 seconds`).
+4. Robi stream-stream left-outer join po `tx_id` w oknie czasowym `±10 s`.
+5. Liczy online te same cechy ktore widzial model XGBoost podczas treningu
+   (`fraud_model_training.ipynb`).
+6. Rownolegle dwa pipeline'y monitorujace okna czasowe.
+
+**Cechy online (wejscie dla modelu w Kroku 8):**
+
+| Cecha | Zrodlo | Opis |
+|---|---|---|
+| `hour`, `dayofweek`, `is_weekend` | `transactions.timestamp` | cechy temporalne, `dayofweek` w konwencji pandas (Mon=0..Sun=6) |
+| `amount_log1p` | `transactions.amount` | log(1 + amount), stabilizuje rozklad |
+| `amount_to_sender_avg` | tx + profil nadawcy | stosunek kwoty do sredniej historycznej nadawcy |
+| `device_trusted` | `transactions` | flaga z transakcji |
+| `pin_failures`, `device_changed`, `is_offhours_login` | `app_events` (po join) | sygnaly z aplikacji mobilnej |
+| `event_delay_sec` | tx + app_event | roznica timestampow, NULL gdy app_event nie zdazyl |
+| `sender_recipient_pair` | `sender_id->recipient_id` | cecha kategoryczna |
+
+**Pipeline'y monitorujace (osobne strumienie, nie wchodza do modelu):**
+
+| Cecha | Okno | Pipeline |
+|---|---|---|
+| `tx_count_last_5min` | 5 min per `sender_id` | `build_counts_pipeline()` |
+| `unique_recipients_1h` | 1 h per `sender_id` | `build_recipients_pipeline()` |
+
 ---
 
 ## 5. Uruchomienie
@@ -248,6 +288,23 @@ python data_generator/verify_kafka.py --n 10
 python data_generator/export_datasets.py --rows 100000 --fraud 0.10
 ```
 
+### Krok 6 - Uruchomienie Spark joba (real-time scoring)
+
+```bash
+# jednorazowo
+pip install pyspark>=3.5.0
+
+# odpalenie joba (czyta tematy Kafka, joinuje, liczy cechy online)
+bash run_spark.sh
+
+# lub recznie z innym brokerem (np. wewnatrz Dockera):
+KAFKA_BOOTSTRAP=kafka:29092 spark-submit \
+    --packages org.apache.spark:spark-sql-kafka-0-10_2.13:3.5.3 \
+    spark_job/fraud_detector.py
+```
+
+Spark UI dostepne na http://localhost:4040 podczas dzialania joba.
+
 ### Interfejsy webowe
 
 - Kafka UI: http://localhost:8080
@@ -257,25 +314,18 @@ python data_generator/export_datasets.py --rows 100000 --fraud 0.10
 
 ## 6. Nastepne kroki
 
-### Krok 7 - Apache Spark Structured Streaming
+### Krok 8 - Scoring online modelem ML
 
-Napisac job Pythonowy (`spark_job/fraud_detector.py`) ktory:
-1. Odczytuje strumien z tematu `transactions` i `app_events`
-2. Parsuje JSON i joinuje oba strumienie po `tx_id`
-3. Oblicza cechy w oknach czasowych:
-   - `tx_count_last_5min` per `sender_id`
-   - `amount_zscore` (odchylenie od historycznej sredniej)
-   - `unique_recipients_1h`
-   - `geo_distance_km` (dystans GPS od miasta rejestracji)
-   - `pin_failure_rate`
-4. Zwraca wynik jako JSON na temat `alerts`
+Wczytanie zapisanego modelu z `models/xgboost.joblib` w pipelinie Spark
+(`spark_job/fraud_detector.py`), wyliczenie `fraud_probability` i publikacja
+predykcji do tematu Kafka `alerts`:
 
-Uruchomienie przez Docker (obraz `bitnami/spark` lub lokalny `spark-submit`).
+```json
+{ "tx_id": "...", "fraud_probability": 0.82, "predicted_fraud": true, "fraud_type": "account_takeover" }
+```
 
-### Krok 8 - Scoring online
-
-Wczytanie zapisanego modelu z `models/xgboost.joblib` i publikacja predykcji
-ML bez recznie ustawianych progow decyzyjnych.
+Online feature set jest juz zsynchronizowany z notebookiem treningowym
+(patrz 4.4), wiec model mozna podpiac bez dodatkowego mapowania kolumn.
 
 ### Krok 9 - Dashboard Grafana
 
