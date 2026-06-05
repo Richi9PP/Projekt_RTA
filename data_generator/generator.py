@@ -57,7 +57,7 @@ def _make_producer(bootstrap: str):
         key_serializer=lambda k: k.encode("utf-8") if k else None,
         acks="all",
         retries=5,
-        compression_type="lz4",
+        compression_type="gzip",
         linger_ms=20,
     )
 
@@ -88,6 +88,9 @@ def _send_normal(producer,
     tx = build_transaction(sender, recipient, timestamp=ts, is_fraud=False)
     ev = build_app_event(sender, tx["tx_id"], timestamp=ts)
 
+    tx.update({k: ev[k] for k in ("pin_failures", "device_changed", "is_offhours_login",
+                                   "session_duration_sec", "app_version")})
+
     _publish(producer, tx_topic, tx, dry_run, key=sender.user_id)
     _publish(producer, app_topic, ev, dry_run, key=sender.user_id)
 
@@ -117,6 +120,8 @@ def _send_fraud(producer,
 
     pairs = build_fraud_sequence(scenario, ctx)
     for tx, ev in pairs:
+        tx.update({k: ev[k] for k in ("pin_failures", "device_changed", "is_offhours_login",
+                                       "session_duration_sec", "app_version")})
         _publish(producer, tx_topic, tx, dry_run, key=tx["sender_id"])
         _publish(producer, app_topic, ev, dry_run, key=ev["user_id"])
 

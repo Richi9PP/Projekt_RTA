@@ -35,6 +35,12 @@ TRANSACTION_SCHEMA: dict[str, str] = {
     "sender_account_age_days":  "integer",
     "sender_monthly_tx_count":  "integer",
     "sender_avg_amount":        "double",
+    # app-event fields embedded at generation time (avoids stream-stream join latency)
+    "pin_failures":             "integer",
+    "device_changed":           "boolean",
+    "is_offhours_login":        "boolean",
+    "session_duration_sec":     "integer",
+    "app_version":              "string",
 }
 
 APP_EVENT_SCHEMA: dict[str, str] = {

@@ -1,0 +1,141 @@
+{
+  "title": "Real-Time Fraud Detection",
+  "uid": "rta-fraud-dashboard",
+  "version": 1,
+  "schemaVersion": 38,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Throughput (transakcje / min)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"fraud_alerts\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"fraud_alert\" and r._field == \"is_fraud\")\n  |> group()\n  |> aggregateWindow(every: 1m, fn: count, createEmpty: false)\n  |> yield(name: \"tx_per_min\")"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "yellow", "mode": "fixed" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "short",
+          "displayName": "tx/min"
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Fraud Rate (%)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"fraud_alerts\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"fraud_alert\" and r._field == \"is_fraud\")\n  |> group()\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> map(fn: (r) => ({r with _value: r._value * 100.0}))\n  |> yield(name: \"fraud_rate\")"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "custom": { "lineWidth": 2, "fillOpacity": 15 },
+          "unit": "percent",
+          "displayName": "Fraud %",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 15 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Rozkład scenariuszy oszustw",
+      "type": "piechart",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"fraud_alerts\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"fraud_alert\" and r._field == \"is_fraud\")\n  |> filter(fn: (r) => r.predicted_fraud == \"true\")\n  |> filter(fn: (r) => r.fraud_type != \"none\" and r.fraud_type != \"\")\n  |> group(columns: [\"fraud_type\"])\n  |> count()\n  |> drop(columns: [\"_start\", \"_stop\"])\n  |> group()\n  |> pivot(rowKey: [], columnKey: [\"fraud_type\"], valueColumn: \"_value\")\n  |> yield(name: \"scenarios\")"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        }
+      },
+      "options": {
+        "pieType": "pie",
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "right" },
+        "displayLabels": ["name", "percent"]
+      }
+    },
+    {
+      "id": 4,
+      "title": "Mapa GPS anomalii (podejrzane transakcje)",
+      "type": "geomap",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "influxdb", "uid": "${DS_INFLUXDB}" },
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"fraud_alerts\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"fraud_alert\" and r.predicted_fraud == \"true\")\n  |> filter(fn: (r) => r._field == \"sender_lat\" or r._field == \"sender_lon\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> keep(columns: [\"_time\", \"sender_lat\", \"sender_lon\", \"fraud_type\"])\n  |> yield(name: \"gps_points\")"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": {
+        "view": { "id": "coords", "lat": 52, "lon": 19, "zoom": 5 },
+        "controls": { "mouseWheelZoom": true, "showZoom": true, "showAttribution": true },
+        "basemap": { "config": {}, "name": "Layer 0", "type": "default" },
+        "layers": [
+          {
+            "type": "markers",
+            "name": "Alerty oszustw",
+            "config": {
+              "showLegend": false,
+              "style": {
+                "color": { "fixed": "dark-red" },
+                "opacity": 0.8,
+                "size": { "fixed": 6, "max": 15, "min": 2 },
+                "symbol": { "fixed": "img/icons/marker/circle.svg", "mode": "fixed" }
+              }
+            },
+            "filterData": { "id": "byRefId", "options": "A" },
+            "location": { "mode": "coords", "latitude": "sender_lat", "longitude": "sender_lon" },
+            "tooltip": true
+          }
+        ],
+        "tooltip": { "mode": "details" }
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_INFLUXDB",
+        "type": "datasource",
+        "pluginId": "influxdb",
+        "hide": 2
+      }
+    ]
+  }
+}

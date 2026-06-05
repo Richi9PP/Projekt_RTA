@@ -94,3 +94,5 @@ dmypy.json
 # Local development
 *.local
 .claude/
+.packages/
+test_model.py

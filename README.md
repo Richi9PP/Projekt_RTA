@@ -8,6 +8,8 @@
 
 - Kafka UI: http://localhost:8080
 - JupyterLab: http://localhost:8888, token/haslo: `rta`
+- Grafana: http://localhost:3000, login: `admin` / `admin`
+- InfluxDB: http://localhost:8086, login: `admin` / `adminadmin`
 
 ## 1. Problem biznesowy
 
@@ -30,7 +32,7 @@ predykcje modelu ML zanim bank zatwierdzi przelew.
 ## 2. Architektura systemu
 
 ```
-generator.py  -->  Kafka (topics: transactions, app_events)  -->  Spark Streaming  -->  Kafka (topic: alerts)  -->  Grafana
+generator.py  -->  Kafka (topics: transactions, app_events)  -->  Spark Streaming  -->  Kafka (topic: alerts)  -->  alert_bridge.py  -->  InfluxDB  -->  Grafana
 ```
 
 Szczegolowo:
@@ -41,32 +43,47 @@ Szczegolowo:
 |  profiles.py --> event_builder.py --> fraud_scenarios.py         |
 |                       generator.py                               |
 +------------------------------+-----------------------------------+
-                               | JSON / kafka-python-ng
+                               | JSON / kafka-python (50 tx/s)
                +---------------v--------------+
                |         Apache Kafka          |
                |  topic: transactions          |
                |  topic: app_events            |
                +------+------------------+-----+
-                      |                  |
-         +------------v------------------v-----+
-         |      Apache Spark Structured        |
-         |      Streaming  (job Pythonowy)      |
-         |  - parsowanie JSON                  |
-         |  - okna czasowe (5 min, 1 h)        |
-         |  - feature engineering              |
-         |  - scoring / reguły decyzyjne       |
-         +-------------------+-----------------+
+                      |
+         +------------v-----------------------------+
+         |      Apache Spark Structured Streaming   |
+         |  - parsowanie JSON                       |
+         |  - feature engineering                   |
+         |  - scoring modelem XGBoost               |
+         |  - okna czasowe (5 min, 1 h)             |
+         |  - publikacja alertow                    |
+         +-------------------+----------------------+
                              |
                +-------------v--------------+
                |   Kafka topic: alerts       |
                |  { tx_id, fraud_probability,|
                |    predicted_fraud,         |
-               |    fraud_type }             |
+               |    fraud_type,              |
+               |    sender_lat/lon/city }    |
+               +-------------+--------------+
+                             |
+               +-------------v--------------+
+               |      alert_bridge.py        |
+               |   Kafka -> InfluxDB         |
+               +-------------+--------------+
+                             |
+               +-------------v--------------+
+               |         InfluxDB 2.x        |
+               |   bucket: fraud_alerts      |
                +-------------+--------------+
                              |
                +-------------v--------------+
                |         Grafana            |
                |   dashboard real-time      |
+               |   - Throughput (tx/min)    |
+               |   - Fraud Rate (%)         |
+               |   - Rozklad scenariuszy    |
+               |   - Mapa GPS anomalii      |
                +----------------------------+
 ```
 
@@ -76,16 +93,16 @@ Szczegolowo:
 
 | Krok | Komponent | Status |
 |---|---|---|
-| 1 | Silnik generowania danych (`data_generator/`) | **GOTOWE** |
-| 2 | Infrastruktura Kafka (Docker Compose) | **GOTOWE** |
-| 3 | Weryfikacja polaczenia generator -> Kafka | **GOTOWE** |
-| 4 | Eksport datasetu offline (`data_generator/export_datasets.py`) | **GOTOWE** |
-| 5 | Notebook treningowy ML (`fraud_model_training.ipynb`) | **GOTOWE** |
-| 6 | Modele offline (`models/`) | **GOTOWE** |
-| 7 | Spark Structured Streaming job | **GOTOWE** |
-| 8 | Feature engineering online (okna czasowe) | **GOTOWE** |
-| 9 | Scoring online / publikacja alertow | TODO |
-| 10 | Dashboard Grafana | TODO |
+| 1 | Silnik generowania danych (`data_generator/`) | ✅ **GOTOWE** |
+| 2 | Infrastruktura Kafka (Docker Compose) | ✅ **GOTOWE** |
+| 3 | Weryfikacja polaczenia generator -> Kafka | ✅ **GOTOWE** |
+| 4 | Eksport datasetu offline (`data_generator/export_datasets.py`) | ✅ **GOTOWE** |
+| 5 | Notebook treningowy ML (`fraud_model_training.ipynb`) | ✅ **GOTOWE** |
+| 6 | Modele offline (`models/`) | ✅ **GOTOWE** |
+| 7 | Spark Structured Streaming job | ✅ **GOTOWE** |
+| 8 | Feature engineering online (okna czasowe) | ✅ **GOTOWE** |
+| 9 | Scoring online / publikacja alertow | ✅ **GOTOWE** |
+| 10 | Dashboard Grafana | ✅ **GOTOWE** |
 
 ---
 
@@ -112,7 +129,7 @@ data_generator/
 
 **Schematy wiadomosci:**
 
-Temat `transactions`:
+Temat `transactions` (zawiera rowniez pola z app_event - embedowane przy generowaniu):
 ```json
 {
   "tx_id": "uuid",
@@ -132,11 +149,16 @@ Temat `transactions`:
   "fraud_type": "",
   "sender_account_age_days": 480,
   "sender_monthly_tx_count": 17,
-  "sender_avg_amount": 293.92
+  "sender_avg_amount": 293.92,
+  "pin_failures": 0,
+  "device_changed": false,
+  "is_offhours_login": false,
+  "session_duration_sec": 119,
+  "app_version": "3.7.3"
 }
 ```
 
-Temat `app_events`:
+Temat `app_events` (publikowany rownoczesnie, uzywany do monitorowania):
 ```json
 {
   "event_id": "uuid",
@@ -162,14 +184,20 @@ Temat `app_events`:
 | round_trip | 15% | recipient_id = oryginalny nadawca |
 | layering | 10% | recipient z puli mule, kwota -15% |
 
-### 4.2 `docker-compose.yml` - infrastruktura Kafka
+### 4.2 `docker-compose.yml` - pelna infrastruktura
 
-Uruchamia trzy kontenery:
-- **rta_kafka** (`apache/kafka:latest`) - broker KRaft (bez Zookeepera), port 9092
-- **rta_kafka_ui** (`provectuslabs/kafka-ui`) - interfejs webowy, port 8080
-- **rta_jupyter** (`jupyterlab-project-jupyter:latest`) - JupyterLab, port 8888, token `rta`
+Uruchamia wszystkie serwisy jednym poleceniem:
 
-Tematy tworzone sa automatycznie przy pierwszej publikacji (`AUTO_CREATE_TOPICS_ENABLE=true`).
+| Kontener | Obraz | Port | Rola |
+|---|---|---|---|
+| `rta_kafka` | `apache/kafka:latest` | 9092 | Broker Kafka (KRaft) |
+| `rta_kafka_ui` | `provectuslabs/kafka-ui` | 8080 | Interfejs webowy Kafki |
+| `rta_jupyter` | `jupyterlab-project-jupyter:latest` | 8888 | JupyterLab (token: `rta`) |
+| `rta_influxdb` | `influxdb:2.7` | 8086 | Baza szeregów czasowych |
+| `rta_data_generator` | `python:3.11-slim` | - | Generator 50 tx/s, 10% fraudów |
+| `rta_spark` | `jupyterlab-project-jupyter:latest` | - | Spark Streaming + scoring ML |
+| `rta_alert_bridge` | `python:3.11-slim` | - | Kafka alerts → InfluxDB |
+| `rta_grafana` | `grafana/grafana:latest` | 3000 | Dashboard real-time |
 
 ### 4.3 Dataset i modele offline
 
@@ -209,128 +237,109 @@ models/
     xgboost.joblib
 ```
 
-### 4.4 `spark_job/` - real-time pipeline (Spark Structured Streaming)
+### 4.4 `spark_job/fraud_detector.py` - real-time scoring pipeline
 
-```
-spark_job/
-    fraud_detector.py    # job Sparka: Kafka -> join -> features -> console
-    requirements.txt     # pyspark>=3.5.0
-run_spark.sh             # wrapper: spark-submit z pakietem kafka
-```
+Trzy rownolegle strumienie Spark Structured Streaming:
 
-Co robi `fraud_detector.py`:
+**1. Fraud scoring (glowny pipeline):**
+1. Czyta strumien z tematu Kafka `transactions`.
+2. Parsuje JSON wedlug schematu z `data_generator/schemas.py`.
+3. Liczy cechy online zsynchronizowane z notebookiem treningowym.
+4. Wczytuje model `models/xgboost.joblib` i wywoluje `predict_proba`.
+5. Publikuje alerty do tematu Kafka `alerts` z polami:
+   `tx_id`, `fraud_probability`, `predicted_fraud`, `fraud_type`, `sender_lat/lon/city`.
 
-1. Czyta strumienie z tematow Kafka `transactions` i `app_events`
-   (bootstrap `localhost:9092` lub `kafka:29092` przez env `KAFKA_BOOTSTRAP`).
-2. Parsuje JSON wedlug schematow z `data_generator/schemas.py`.
-3. Dodaje watermarki na timestampach obu strumieni (`5 seconds`).
-4. Robi stream-stream left-outer join po `tx_id` w oknie czasowym `±10 s`.
-5. Liczy online te same cechy ktore widzial model XGBoost podczas treningu
-   (`fraud_model_training.ipynb`).
-6. Rownolegle dwa pipeline'y monitorujace okna czasowe.
-
-**Cechy online (wejscie dla modelu w Kroku 8):**
+**Cechy online (22 cechy, identyczny zbior co w treningu):**
 
 | Cecha | Zrodlo | Opis |
 |---|---|---|
-| `hour`, `dayofweek`, `is_weekend` | `transactions.timestamp` | cechy temporalne, `dayofweek` w konwencji pandas (Mon=0..Sun=6) |
-| `amount_log1p` | `transactions.amount` | log(1 + amount), stabilizuje rozklad |
-| `amount_to_sender_avg` | tx + profil nadawcy | stosunek kwoty do sredniej historycznej nadawcy |
-| `device_trusted` | `transactions` | flaga z transakcji |
-| `pin_failures`, `device_changed`, `is_offhours_login` | `app_events` (po join) | sygnaly z aplikacji mobilnej |
-| `event_delay_sec` | tx + app_event | roznica timestampow, NULL gdy app_event nie zdazyl |
+| `hour`, `dayofweek`, `is_weekend` | `timestamp` | cechy temporalne |
+| `amount_log1p` | `amount` | log(1 + amount), stabilizuje rozklad |
+| `amount_to_sender_avg` | tx + profil | stosunek kwoty do sredniej nadawcy |
+| `device_trusted`, `device_type` | `transactions` | flagi urzadzenia |
+| `pin_failures`, `device_changed`, `is_offhours_login` | embedowane w tx | sygnaly z aplikacji mobilnej |
+| `session_duration_sec`, `app_version` | embedowane w tx | metadane sesji |
 | `sender_recipient_pair` | `sender_id->recipient_id` | cecha kategoryczna |
 
-**Pipeline'y monitorujace (osobne strumienie, nie wchodza do modelu):**
+**2. Licznik transakcji (monitoring):**
+- `tx_count_last_5min` — okno 5 min per `sender_id` (`build_counts_pipeline`)
 
-| Cecha | Okno | Pipeline |
+**3. Unikalni odbiorcy (monitoring):**
+- `unique_recipients_1h` — okno 1 h per `sender_id` (`build_recipients_pipeline`)
+
+### 4.5 `alert_bridge.py` - most Kafka → InfluxDB
+
+Konsumuje temat `alerts`, zapisuje do InfluxDB bucket `fraud_alerts`:
+- tagi: `predicted_fraud`, `fraud_type`
+- pola: `is_fraud` (0/1), `fraud_probability`, `tx_id`, `sender_lat`, `sender_lon`, `sender_city`
+
+### 4.6 `grafana/` - dashboard real-time
+
+4 panele aktualizowane co 5 sekund:
+
+| Panel | Typ | Opis |
 |---|---|---|
-| `tx_count_last_5min` | 5 min per `sender_id` | `build_counts_pipeline()` |
-| `unique_recipients_1h` | 1 h per `sender_id` | `build_recipients_pipeline()` |
+| Throughput | Time series | Liczba transakcji na minute |
+| Fraud Rate | Time series | % transakcji oznaczonych jako fraud |
+| Rozklad scenariuszy | Pie chart | Udzial kazdego typu oszustwa |
+| Mapa GPS anomalii | Geomap | Lokalizacje podejrzanych transakcji na mapie Polski |
 
 ---
 
 ## 5. Uruchomienie
 
-### Krok 1 - Instalacja zaleznosci lokalnych
-
-```bash
-pip install -r requirements.txt
-```
-
-### Krok 2 - Start Kafki, Kafka UI i JupyterLab
+### Jedyne polecenie potrzebne do startu
 
 ```bash
 docker compose up -d
-# Poczekaj az kafka przejdzie w stan healthy (~30 s)
-docker ps  # kolumna STATUS powinna pokazac "(healthy)"
 ```
 
-### Krok 3 - Uruchomienie generatora
+Wszystkie serwisy startuja automatycznie w odpowiedniej kolejnosci.
+Pierwsze uruchomienie pobiera obrazy i instaluje zaleznoci (~2-3 min).
+
+### Sprawdzenie statusu
 
 ```bash
-# Wyslij dane do Kafki (10 tx/s, 10% fraudow)
-python data_generator/generator.py --rate 10 --fraud 0.10
+docker ps
+# Wszystkie kontenery powinny byc "healthy" lub "Up"
 
-# Test bez Kafki (drukuje JSON na stdout)
-python data_generator/generator.py --dry-run --rate 5
+docker logs rta_spark --follow
+# Oczekiwany output:
+# [SCORER] Model loaded OK
+# [SCORER] batch=1 rows=~600 fraud=~60 (10.0%)
 ```
 
-### Krok 4 - Weryfikacja odczytu z Kafki
+### Zatrzymanie i restart z czystym stanem
 
 ```bash
-python data_generator/verify_kafka.py --n 10
+docker compose down -v   # usuwa tez wolumeny (Kafka, InfluxDB)
+docker compose up -d
 ```
-
-### Krok 5 - Eksport datasetu offline
-
-```bash
-python data_generator/export_datasets.py --rows 100000 --fraud 0.10
-```
-
-### Krok 6 - Uruchomienie Spark joba (real-time scoring)
-
-```bash
-# jednorazowo
-pip install pyspark>=3.5.0
-
-# odpalenie joba (czyta tematy Kafka, joinuje, liczy cechy online)
-bash run_spark.sh
-
-# lub recznie z innym brokerem (np. wewnatrz Dockera):
-KAFKA_BOOTSTRAP=kafka:29092 spark-submit \
-    --packages org.apache.spark:spark-sql-kafka-0-10_2.13:3.5.3 \
-    spark_job/fraud_detector.py
-```
-
-Spark UI dostepne na http://localhost:4040 podczas dzialania joba.
 
 ### Interfejsy webowe
 
-- Kafka UI: http://localhost:8080
-- JupyterLab: http://localhost:8888, token/haslo `rta`
+| Serwis | URL | Dane logowania |
+|---|---|---|
+| Grafana | http://localhost:3000 | admin / admin |
+| JupyterLab | http://localhost:8888 | token: `rta` |
+| Kafka UI | http://localhost:8080 | - |
+| InfluxDB | http://localhost:8086 | admin / adminadmin |
 
----
+### Parametry generatora (opcjonalne)
 
-## 6. Nastepne kroki
+Domyslnie: 50 tx/s, 10% fraudow. Aby zmienic, edytuj `docker-compose.yml`:
 
-### Krok 8 - Scoring online modelem ML
-
-Wczytanie zapisanego modelu z `models/xgboost.joblib` w pipelinie Spark
-(`spark_job/fraud_detector.py`), wyliczenie `fraud_probability` i publikacja
-predykcji do tematu Kafka `alerts`:
-
-```json
-{ "tx_id": "...", "fraud_probability": 0.82, "predicted_fraud": true, "fraud_type": "account_takeover" }
+```yaml
+command: >
+  bash -c "pip install kafka-python --quiet && 
+           python generator.py --rate 100 --fraud 0.15 --bootstrap kafka:29092"
 ```
 
-Online feature set jest juz zsynchronizowany z notebookiem treningowym
-(patrz 4.4), wiec model mozna podpiac bez dodatkowego mapowania kolumn.
+### Trenowanie modelu od nowa
 
-### Krok 9 - Dashboard Grafana
+Otworz JupyterLab (http://localhost:8888, token `rta`) i uruchom notebook:
+```
+fraud_model_training.ipynb
+```
 
-Grafana + plugin Kafka -> wizualizacja real-time:
-- throughput (tx/s)
-- fraud rate (%)
-- rozklad scenariuszy oszustw
-- mapa GPS anomalii
+Model zapisze sie do `models/xgboost.joblib`. Spark zaladuje go przy nastepnym restarcie.
